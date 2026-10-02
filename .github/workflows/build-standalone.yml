@@ -1,0 +1,102 @@
+name: Build standalone web package
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/build-standalone.yml"
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci --legacy-peer-deps
+
+      - name: Enable standalone output for this build
+        shell: python
+        run: |
+          from pathlib import Path
+          p = Path("next.config.mjs")
+          s = p.read_text()
+          needle = "const nextConfig = {"
+          if "output: 'standalone'" not in s:
+              s = s.replace(needle, needle + "\n  output: 'standalone',", 1)
+          p.write_text(s)
+
+      - name: Build production app
+        run: npm run build
+
+      - name: Assemble runnable package
+        run: |
+          mkdir -p dist/kuran-web/.next
+          cp -a .next/standalone/. dist/kuran-web/
+          cp -a .next/static dist/kuran-web/.next/static
+          if [ -d public ]; then cp -a public dist/kuran-web/public; fi
+
+          cat > dist/kuran-web/RUN-LINUX-MAC.sh <<'EOF'
+          #!/usr/bin/env sh
+          export PORT="${PORT:-3000}"
+          export HOSTNAME="${HOSTNAME:-0.0.0.0}"
+          node server.js
+          EOF
+          chmod +x dist/kuran-web/RUN-LINUX-MAC.sh
+
+          cat > dist/kuran-web/RUN-WINDOWS.bat <<'EOF'
+          @echo off
+          if "%PORT%"=="" set PORT=3000
+          if "%HOSTNAME%"=="" set HOSTNAME=0.0.0.0
+          node server.js
+          pause
+          EOF
+
+          cat > dist/kuran-web/ENV-EXAMPLE.txt <<'EOF'
+          DIB_KURAN_API_BASE_URL=https://api.diyanet.gov.tr
+          DIB_KURAN_API_TOKEN=BURAYA_API_TOKEN
+          PORT=3000
+          EOF
+
+          cat > dist/kuran-web/START-HERE.txt <<'EOF'
+          KURAN WEB UYGULAMASI - STANDALONE BUILD
+
+          Gereksinim:
+          - Node.js 20 veya 22
+
+          Windows:
+          1) Bu klasorde PowerShell/CMD acin.
+          2) Diyanet API kullanacaksaniz:
+             set DIB_KURAN_API_BASE_URL=https://api.diyanet.gov.tr
+             set DIB_KURAN_API_TOKEN=TOKENINIZ
+          3) RUN-WINDOWS.bat dosyasini calistirin.
+          4) Tarayicida http://localhost:3000 acin.
+
+          Linux/macOS:
+          export DIB_KURAN_API_BASE_URL=https://api.diyanet.gov.tr
+          export DIB_KURAN_API_TOKEN=TOKENINIZ
+          ./RUN-LINUX-MAC.sh
+
+          Not:
+          API token olmadan ana web arayuzu acilabilir; Kur'an verisi isteyen ekranlarda
+          "API configuration missing" hatasi gorulebilir.
+          EOF
+
+      - name: Upload standalone package
+        uses: actions/upload-artifact@v4
+        with:
+          name: kuran-web-standalone
+          path: dist/kuran-web
+          if-no-files-found: error
+          retention-days: 30
